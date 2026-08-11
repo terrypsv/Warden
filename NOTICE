@@ -1,0 +1,9 @@
+Warden
+Copyright (c) 2026 Terry Passave
+Auteur et titulaire exclusif des droits : Terry Passave
+
+Developpe en dehors de tout temps de travail salarie, sur materiel
+personnel appartenant a l'auteur.
+
+Composants tiers :
+- gopkg.in/yaml.v3 (Apache-2.0 / MIT), utilise sans modification.

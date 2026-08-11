@@ -1,0 +1,71 @@
+# Warden - matrice de flux
+# Copyright (c) 2026 Terry Passave. Tous droits reserves.
+#
+# Ce fichier est la declaration d'intention: ce qui DOIT passer entre zones.
+# Warden compare cette declaration a ce qui passe reellement.
+# Tout couple (zone, port) absent de "flows" est evalue avec "default".
+
+version: 1
+
+# Action appliquee a tout flux non declare. Garder "deny": c'est ce qui
+# transforme un oubli de declaration en constat, au lieu de le rendre muet.
+default: deny
+
+# Ports testes sur chaque paire de zones en plus des flux declares.
+# Retirer cette cle pour utiliser la liste par defaut integree.
+sweep_ports: [22, 80, 135, 139, 443, 445, 3389, 5985, 8080]
+
+zones:
+  - name: lan
+    cidr: 10.10.10.0/24
+    probe: 10.10.10.50
+    note: zone bleue, poste d'administration et DC Samba
+
+  - name: dmz
+    cidr: 10.10.20.0/24
+    probe: 10.10.20.50
+    note: cibles web vulnerables, conteneur Docker
+
+  - name: red
+    cidr: 10.10.30.0/24
+    probe: 10.10.30.50
+    note: zone attaquant, Kali
+
+flows:
+  # L'attaquant doit atteindre les cibles web de la DMZ, et rien d'autre.
+  - from: red
+    to: dmz
+    proto: tcp
+    ports: [80, 443, 3000, 8080]
+    action: allow
+    comment: acces applicatif aux cibles d'entrainement
+    references:
+      - framework: MITRE ATT&CK
+        id: TA0008
+
+  # Interdiction explicite, pour que le constat porte un libelle utile
+  # plutot que de tomber dans le cas "non declare".
+  - from: red
+    to: lan
+    proto: tcp
+    ports: [22, 445, 3389, 5985]
+    action: deny
+    comment: aucun rebond de la zone rouge vers la zone bleue
+    references:
+      - framework: MITRE ATT&CK
+        id: T1021
+
+  # Administration depuis le LAN vers la DMZ.
+  - from: lan
+    to: dmz
+    proto: tcp
+    ports: [22]
+    action: allow
+    comment: administration SSH des cibles
+
+  # Declare mais non teste en v0.1: ICMP et UDP attendent l'agent recepteur.
+  - from: lan
+    to: dmz
+    proto: icmp
+    action: allow
+    comment: supervision de disponibilite

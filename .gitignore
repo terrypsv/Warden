@@ -1,0 +1,20 @@
+# binaires
+warden
+warden.exe
+/dist/
+/bin/
+
+# rapports generes
+*.report.json
+report.json
+
+# operationnel local
+OPS.md
+*.local.yaml
+*.local.yml
+
+# outils
+.idea/
+.vscode/
+*.swp
+.DS_Store
