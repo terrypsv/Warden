@@ -1,12 +1,14 @@
-# binaires
-warden
-warden.exe
+# binaires (motifs ancres a la racine, sinon cmd/warden/ est exclu)
+/warden
+/warden.exe
+/warden-*
 /dist/
 /bin/
 
 # rapports generes
 *.report.json
 report.json
+rapport*.json
 
 # operationnel local
 OPS.md
