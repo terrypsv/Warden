@@ -8,12 +8,25 @@ package probe
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// BannerPrefix identifies a warden listener. A peer that answers with this
+// prefix is a listener we placed there, not a service that happened to be
+// running. Everything about strict mode depends on this distinction.
+const BannerPrefix = "WARDEN/1 "
+
+// bannerMaxBytes caps how much of the peer's first line we read.
+const bannerMaxBytes = 128
+
+// defaultBannerTimeout bounds the wait for a banner. Real services that never
+// speak first would otherwise stall every probe for the full dial timeout.
+const defaultBannerTimeout = 500 * time.Millisecond
 
 // Outcome is what the network actually did.
 type Outcome string
@@ -43,6 +56,12 @@ type Result struct {
 	Outcome Outcome
 	Latency time.Duration
 	Detail  string
+	// Banner is the first line the peer sent, trimmed and truncated. Empty
+	// when the peer said nothing within the banner timeout.
+	Banner string
+	// ListenerConfirmed is true when the peer identified itself as a warden
+	// listener with a valid token. This is proof, not a claim.
+	ListenerConfirmed bool
 }
 
 // Prober checks one endpoint. Implementations must be safe for concurrent use.
@@ -55,6 +74,11 @@ type Prober interface {
 // both "blocked" and "no service", so they wait for the receiving agent.
 type TCPProber struct {
 	Timeout time.Duration
+	// BannerTimeout bounds the wait for a listener banner.
+	BannerTimeout time.Duration
+	// ExpectToken, when set, must match the token presented by the listener.
+	// Empty accepts any well-formed warden banner.
+	ExpectToken string
 }
 
 // Check implements Prober.
@@ -78,10 +102,56 @@ func (p TCPProber) Check(ctx context.Context, host, proto string, port int) Resu
 	elapsed := time.Since(start)
 
 	if err == nil {
+		banner := readBanner(conn, p.bannerTimeout())
 		_ = conn.Close()
-		return Result{Outcome: OutcomeOpen, Latency: elapsed}
+		return Result{
+			Outcome:           OutcomeOpen,
+			Latency:           elapsed,
+			Banner:            banner,
+			ListenerConfirmed: MatchBanner(banner, p.ExpectToken),
+		}
 	}
 	return Result{Outcome: Classify(err), Latency: elapsed, Detail: err.Error()}
+}
+
+func (p TCPProber) bannerTimeout() time.Duration {
+	if p.BannerTimeout > 0 {
+		return p.BannerTimeout
+	}
+	return defaultBannerTimeout
+}
+
+// MatchBanner reports whether a banner proves a warden listener answered.
+// The token comparison is constant time: the token is a shared secret that
+// tells an operator whether the measurement can be trusted, and leaking it
+// through timing would let a rogue service impersonate a listener.
+func MatchBanner(banner, expectToken string) bool {
+	if !strings.HasPrefix(banner, BannerPrefix) {
+		return false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(banner, BannerPrefix))
+	if expectToken == "" {
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(expectToken)) == 1
+}
+
+// readBanner reads the peer's first line, if it speaks first. Failure to read
+// is not an error: most real services wait for the client.
+func readBanner(conn net.Conn, timeout time.Duration) string {
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return ""
+	}
+	buf := make([]byte, bannerMaxBytes)
+	n, _ := conn.Read(buf)
+	if n <= 0 {
+		return ""
+	}
+	line := string(buf[:n])
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	return strings.TrimSpace(line)
 }
 
 // Classify maps a dial error onto an outcome. It matches on message text

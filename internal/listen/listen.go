@@ -8,23 +8,47 @@ package listen
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"sync"
+	"time"
+
+	"github.com/terrypsv/Warden/internal/probe"
 )
 
-// Serve binds every requested port on addr and accepts connections until ctx
-// is cancelled. Accepted connections are closed immediately: the handshake
-// is the only signal Warden needs. Ports that cannot be bound are reported
-// and skipped rather than aborting the whole run.
-func Serve(ctx context.Context, addr string, ports []int, logf func(string, ...any)) error {
+// writeTimeout bounds the banner write so a stalled peer cannot pin a goroutine.
+const writeTimeout = 2 * time.Second
+
+// NewToken returns a random token identifying one listener deployment.
+func NewToken() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// Serve binds every requested port on addr and announces itself to every
+// connection with a signed banner, then closes. The banner is what lets the
+// prober prove a listener was really there instead of trusting the operator's
+// -listener flag. Ports that cannot be bound are reported and skipped rather
+// than aborting the whole run.
+func Serve(ctx context.Context, addr string, ports []int, token string, logf func(string, ...any)) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	if len(ports) == 0 {
 		return fmt.Errorf("no ports requested")
 	}
+	if token == "" {
+		return fmt.Errorf("no token provided")
+	}
+
+	banner := probe.BannerPrefix + token + "\n"
 
 	var (
 		wg        sync.WaitGroup
@@ -52,6 +76,8 @@ func Serve(ctx context.Context, addr string, ports []int, logf func(string, ...a
 					return
 				}
 				logf("connexion depuis %s vers %s", conn.RemoteAddr(), ln.Addr())
+				_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+				_, _ = io.WriteString(conn, banner)
 				_ = conn.Close()
 			}
 		}(ln)
