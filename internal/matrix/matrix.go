@@ -22,7 +22,7 @@ const SchemaVersion = 1
 // DefaultSweepPorts is used when the matrix does not define sweep_ports.
 // These are the ports whose exposure across a zone boundary is most likely
 // to matter: remote access, SMB, RDP, WinRM and common web listeners.
-var DefaultSweepPorts = []int{22, 80, 135, 139, 443, 445, 3389, 5985, 8080}
+var DefaultSweepPorts = []int{22, 80, 88, 135, 139, 389, 443, 445, 464, 3268, 3269, 3389, 5985, 8080}
 
 // Action is the expected outcome for a flow.
 type Action string
