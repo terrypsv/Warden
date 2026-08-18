@@ -8,7 +8,9 @@ package verify
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/terrypsv/Warden/internal/finding"
@@ -33,11 +35,13 @@ type Options struct {
 	From string
 	// Parallel caps concurrent probes.
 	Parallel int
-	// ListenerReady declares that `warden listen` is up in every target zone
-	// on every tested port. It removes the ambiguity of an RST: with a
-	// listener present, a refusal can only come from the firewall. Without
-	// it, refusals are reported for review instead of being judged.
-	ListenerReady bool
+	// ListenerRequested asks for strict verdicts, where a refusal can only
+	// come from the firewall because a listener answers on every port. The
+	// request alone is not enough: strict applies per zone, and only where a
+	// listener actually proved itself by returning a valid banner. An
+	// operator who forgets to start a listener in one zone gets honest
+	// review verdicts there instead of undeserved passes.
+	ListenerRequested bool
 }
 
 // Runner executes a verification pass.
@@ -69,8 +73,8 @@ func (r *Runner) Run(ctx context.Context) (*finding.Report, error) {
 	report := finding.NewReport("warden", version)
 	report.Run.Context["source_zone"] = r.Options.From
 	report.Run.Context["default_action"] = string(r.Matrix.Default)
-	report.Run.Context["mode"] = mode(r.Options.ListenerReady)
 	report.Run.Context["cases"] = strconv.Itoa(len(cases))
+	report.Run.Context["listener_requested"] = strconv.FormatBool(r.Options.ListenerRequested)
 
 	parallel := r.Options.Parallel
 	if parallel <= 0 {
@@ -93,24 +97,90 @@ func (r *Runner) Run(ctx context.Context) (*finding.Report, error) {
 	}
 	wg.Wait()
 
+	// A listener proves itself by answering with a valid banner on at least
+	// one port of a zone. Absent that proof, strict does not apply there.
+	strictZones := make(map[string]bool)
+	targetZones := make(map[string]bool)
 	for i, c := range cases {
-		report.Add(r.finding(i+1, c, results[i]))
+		targetZones[c.To.Name] = true
+		if results[i].ListenerConfirmed {
+			strictZones[c.To.Name] = true
+		}
 	}
+
+	seq := 0
+	for i, c := range cases {
+		seq++
+		strict := r.Options.ListenerRequested && strictZones[c.To.Name]
+		report.Add(r.finding(seq, c, results[i], strict))
+	}
+
+	if r.Options.ListenerRequested {
+		for _, name := range sortedKeys(targetZones) {
+			if strictZones[name] {
+				continue
+			}
+			seq++
+			report.Add(r.unconfirmedListener(seq, name))
+		}
+	}
+
+	report.Run.Context["strict_zones"] = strings.Join(sortedKeys(strictZones), ",")
 	report.Finish()
 	return report, nil
 }
 
-func (r *Runner) finding(seq int, c matrix.Case, res probe.Result) finding.Finding {
-	status, severity, title, remediation := r.verdict(c, res)
+// StrictZones reports which target zones proved a listener during a run.
+func StrictZones(report *finding.Report) []string {
+	raw := report.Run.Context["strict_zones"]
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, ",")
+}
+
+func (r *Runner) unconfirmedListener(seq int, zone string) finding.Finding {
+	return finding.Finding{
+		ID:       fmt.Sprintf("WRD-SEG-%04d", seq),
+		Title:    "Mode strict demande mais aucun ecouteur confirme dans la zone " + zone,
+		Category: Category,
+		Severity: finding.SeverityInfo,
+		Status:   finding.StatusReview,
+		Target:   finding.Target{Type: "zone", Identifier: zone},
+		Expected: "banniere warden sur au moins un port joignable",
+		Observed: "aucune banniere recue",
+		Remediation: "Lancer warden listen dans cette zone, ou accepter des verdicts blind. " +
+			"Note: si tous les ports de la zone sont correctement bloques, aucune banniere ne peut " +
+			"remonter et la confirmation est impossible par construction.",
+		Declared: false,
+	}
+}
+
+func (r *Runner) finding(seq int, c matrix.Case, res probe.Result, strict bool) finding.Finding {
+	status, severity, title, remediation := r.verdict(c, res, strict)
 
 	observed := string(res.Outcome)
-	if res.Detail != "" {
+	switch {
+	case res.Outcome == probe.OutcomeOpen && res.ListenerConfirmed:
+		observed = "open (ecouteur warden)"
+	case res.Outcome == probe.OutcomeOpen:
+		observed = "open (service tiers)"
+	case res.Detail != "":
 		observed = fmt.Sprintf("%s (%s)", res.Outcome, res.Detail)
 	}
 
 	description := c.Comment
 	if description == "" && !c.Declared {
 		description = "Flux absent de la matrice, evalue avec l'action par defaut."
+	}
+
+	evidence := []finding.Evidence{{
+		Type: "probe",
+		Data: fmt.Sprintf("dst=%s proto=%s port=%d outcome=%s latency=%s mode=%s",
+			c.To.Probe, c.Proto, c.Port, res.Outcome, res.Latency.Round(1e6), modeLabel(strict)),
+	}}
+	if res.Banner != "" {
+		evidence = append(evidence, finding.Evidence{Type: "banner", Data: res.Banner})
 	}
 
 	return finding.Finding{
@@ -125,16 +195,12 @@ func (r *Runner) finding(seq int, c matrix.Case, res probe.Result) finding.Findi
 		Observed:    observed,
 		Remediation: remediation,
 		Declared:    c.Declared,
-		Evidence: []finding.Evidence{{
-			Type: "probe",
-			Data: fmt.Sprintf("dst=%s proto=%s port=%d outcome=%s latency=%s",
-				c.To.Probe, c.Proto, c.Port, res.Outcome, res.Latency.Round(1e6)),
-		}},
-		References: convert(c.References),
+		Evidence:    evidence,
+		References:  convert(c.References),
 	}
 }
 
-func (r *Runner) verdict(c matrix.Case, res probe.Result) (finding.Status, finding.Severity, string, string) {
+func (r *Runner) verdict(c matrix.Case, res probe.Result, strict bool) (finding.Status, finding.Severity, string, string) {
 	label := c.Key
 
 	switch res.Outcome {
@@ -156,14 +222,14 @@ func (r *Runner) verdict(c matrix.Case, res probe.Result) (finding.Status, findi
 				"Flux declare autorise mais bloque: " + label,
 				"Verifier la regle de pare-feu correspondante, ou retirer ce flux de la matrice s'il n'est plus necessaire."
 		case probe.OutcomeRefused:
-			if r.Options.ListenerReady {
+			if strict {
 				return finding.StatusFail, finding.SeverityMedium,
 					"Flux autorise rejete par le pare-feu: " + label,
-					"Un ecouteur repond dans la zone cible, le RST vient donc du filtrage. Corriger la regle."
+					"Un ecouteur confirme repond dans la zone cible, le RST vient donc du filtrage. Corriger la regle."
 			}
 			return finding.StatusReview, finding.SeverityLow,
 				"Flux autorise, RST recu: " + label,
-				"Sans ecouteur dans la zone cible, un RST peut signifier port ferme. Relancer avec warden listen puis -listener."
+				"Sans ecouteur confirme dans la zone cible, un RST peut signifier port ferme. Lancer warden listen puis relancer avec -listener."
 		}
 	}
 
@@ -183,7 +249,7 @@ func (r *Runner) verdict(c matrix.Case, res probe.Result) (finding.Status, findi
 		return finding.StatusFail, severity, title,
 			"Ajouter une regle de blocage explicite sur ce flux, ou le declarer dans la matrice s'il est legitime."
 	case probe.OutcomeRefused:
-		if r.Options.ListenerReady {
+		if strict {
 			return finding.StatusPass, finding.SeverityInfo,
 				"Flux interdit rejete par le pare-feu: " + label,
 				"Preferer un blocage silencieux a un reject pour ne pas renseigner un attaquant."
@@ -208,9 +274,20 @@ func convert(in []matrix.Reference) []finding.Reference {
 	return out
 }
 
-func mode(listenerReady bool) string {
-	if listenerReady {
+func modeLabel(strict bool) string {
+	if strict {
 		return "strict"
 	}
 	return "blind"
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		if v {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

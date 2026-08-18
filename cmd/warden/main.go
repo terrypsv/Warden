@@ -76,9 +76,14 @@ func usage() {
 Usage:
   warden validate -matrix <fichier>
   warden plan     -matrix <fichier> -from <zone>
-  warden verify   -matrix <fichier> -from <zone> [-out rapport.json] [-listener] [-brief]
-  warden listen   -ports 22,80,443 [-addr 0.0.0.0]
+  warden verify   -matrix <fichier> -from <zone> [-listener] [-token <jeton>] [-out rapport.json] [-brief]
+  warden listen   -ports 22,80,443 [-addr 0.0.0.0] [-token <jeton>]
   warden version
+
+Mode strict:
+  Lancer warden listen dans chaque zone cible, noter le jeton affiche, puis
+  passer -listener -token <jeton> a verify. Le mode strict ne s'applique
+  qu'aux zones ou un ecouteur a reellement repondu.
 
 Codes de sortie:
   0 conforme    1 usage    2 erreur d'execution    3 non-conformites detectees
@@ -147,7 +152,8 @@ func cmdVerify(args []string) (int, error) {
 	out := fs.String("out", "", "ecrire le rapport JSON dans ce fichier")
 	timeout := fs.Duration("timeout", 2*time.Second, "delai par sonde")
 	parallel := fs.Int("parallel", 16, "nombre de sondes simultanees")
-	listener := fs.Bool("listener", false, "warden listen tourne dans les zones cibles sur tous les ports testes")
+	listener := fs.Bool("listener", false, "demander des verdicts stricts, valides zone par zone")
+	token := fs.String("token", "", "jeton attendu des ecouteurs, vide accepte toute banniere warden")
 	brief := fs.Bool("brief", false, "sortie d'une ligne, pour cron et supervision")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
@@ -165,13 +171,16 @@ func cmdVerify(args []string) (int, error) {
 	defer stop()
 
 	runner := &verify.Runner{
-		Matrix:  m,
-		Prober:  probe.TCPProber{Timeout: *timeout},
+		Matrix: m,
+		Prober: probe.TCPProber{
+			Timeout:     *timeout,
+			ExpectToken: *token,
+		},
 		Version: version,
 		Options: verify.Options{
-			From:          *from,
-			Parallel:      *parallel,
-			ListenerReady: *listener,
+			From:              *from,
+			Parallel:          *parallel,
+			ListenerRequested: *listener,
 		},
 	}
 
@@ -188,8 +197,8 @@ func cmdVerify(args []string) (int, error) {
 
 	counts := report.Counts()
 	if *brief {
-		fmt.Printf("warden %s zone=%s fail=%d review=%d pass=%d skipped=%d error=%d\n",
-			version, *from,
+		fmt.Printf("warden %s zone=%s strict=%s fail=%d review=%d pass=%d skipped=%d error=%d\n",
+			version, *from, strings.Join(verify.StrictZones(report), "|"),
 			counts[finding.StatusFail], counts[finding.StatusReview],
 			counts[finding.StatusPass], counts[finding.StatusSkipped],
 			counts[finding.StatusError])
@@ -203,11 +212,18 @@ func cmdVerify(args []string) (int, error) {
 	return exitOK, nil
 }
 
-func printSummary(report *finding.Report, counts map[finding.Status]int, listenerReady bool, out string) {
+func printSummary(report *finding.Report, counts map[finding.Status]int, listenerRequested bool, out string) {
+	strictZones := verify.StrictZones(report)
+
 	mode := "blind"
-	if listenerReady {
-		mode = "strict"
+	if listenerRequested {
+		if len(strictZones) == 0 {
+			mode = "strict demande, aucune zone confirmee"
+		} else {
+			mode = "strict confirme sur " + strings.Join(strictZones, ", ")
+		}
 	}
+
 	fmt.Printf("warden %s - run %s - mode %s\n", version, report.Run.ID, mode)
 	fmt.Printf("%d controle(s): %d fail, %d review, %d pass, %d skipped, %d error\n\n",
 		len(report.Findings),
@@ -235,7 +251,10 @@ func printSummary(report *finding.Report, counts map[finding.Status]int, listene
 		fmt.Println("aucun ecart entre la matrice et le reseau observe")
 	}
 
-	if !listenerReady && counts[finding.StatusReview] > 0 {
+	if listenerRequested && len(strictZones) == 0 {
+		fmt.Println("note: -listener demande mais aucune banniere warden recue. Les verdicts restent blind.")
+	}
+	if !listenerRequested && counts[finding.StatusReview] > 0 {
 		fmt.Println("note: mode blind, les RST sont ambigus. Lancer warden listen dans les zones cibles puis relancer avec -listener.")
 	}
 	if out != "" {
@@ -244,7 +263,7 @@ func printSummary(report *finding.Report, counts map[finding.Status]int, listene
 }
 
 func shortOutcome(s string) string {
-	if i := strings.Index(s, " ("); i > 0 {
+	if i := strings.Index(s, " ("); i > 0 && !strings.HasPrefix(s, "open (") {
 		return s[:i]
 	}
 	return s
@@ -254,6 +273,7 @@ func cmdListen(args []string) error {
 	fs := flag.NewFlagSet("listen", flag.ExitOnError)
 	addr := fs.String("addr", "0.0.0.0", "adresse d'ecoute")
 	raw := fs.String("ports", "", "ports TCP separes par des virgules, vide = ports de balayage par defaut")
+	token := fs.String("token", "", "jeton a annoncer, genere aleatoirement si vide")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -263,11 +283,22 @@ func cmdListen(args []string) error {
 		return err
 	}
 
+	value := *token
+	if value == "" {
+		value, err = listen.NewToken()
+		if err != nil {
+			return err
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
 	fmt.Printf("warden %s - ecoute sur %d port(s), Ctrl+C pour arreter\n", version, len(ports))
-	return listen.Serve(ctx, *addr, ports, func(format string, a ...any) {
+	fmt.Printf("jeton: %s\n", value)
+	fmt.Printf("cote sonde: warden verify ... -listener -token %s\n\n", value)
+
+	return listen.Serve(ctx, *addr, ports, value, func(format string, a ...any) {
 		fmt.Printf(time.Now().Format("15:04:05")+" "+format+"\n", a...)
 	})
 }
