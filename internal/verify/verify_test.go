@@ -45,19 +45,23 @@ flows:
     action: allow
 `
 
-func run(t *testing.T, p probe.Prober, listenerRequested bool) (*finding.Report, map[string]finding.Finding) {
+func newRunner(t *testing.T, p probe.Prober, listenerRequested bool) *Runner {
 	t.Helper()
 	m, err := matrix.Parse([]byte(testMatrix))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	r := &Runner{
+	return &Runner{
 		Matrix:  m,
 		Prober:  p,
-		Version: "test",
+		Version: "1.2.3",
 		Options: Options{From: "red", Parallel: 4, ListenerRequested: listenerRequested},
 	}
-	report, err := r.Run(context.Background())
+}
+
+func run(t *testing.T, p probe.Prober, listenerRequested bool) (*finding.Report, map[string]finding.Finding) {
+	t.Helper()
+	report, err := newRunner(t, p, listenerRequested).Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -70,10 +74,15 @@ func run(t *testing.T, p probe.Prober, listenerRequested bool) (*finding.Report,
 
 // confirmedProber simulates a warden listener answering on 80 and nothing
 // listening on 445.
-func confirmedProber() fakeProber {
+func confirmedProber(listenerVersion string) fakeProber {
 	return fakeProber{
 		byPort: map[int]probe.Result{
-			80:  {Outcome: probe.OutcomeOpen, ListenerConfirmed: true, Banner: probe.BannerPrefix + "abc"},
+			80: {
+				Outcome:           probe.OutcomeOpen,
+				ListenerConfirmed: true,
+				ListenerVersion:   listenerVersion,
+				Banner:            probe.Banner("abc", listenerVersion),
+			},
 			445: {Outcome: probe.OutcomeRefused},
 		},
 	}
@@ -90,8 +99,35 @@ func unconfirmedProber() fakeProber {
 	}
 }
 
+func TestPreflightConfirmsZone(t *testing.T) {
+	statuses, err := newRunner(t, confirmedProber("1.2.3"), false).Preflight(context.Background())
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("zones = %d, want 1", len(statuses))
+	}
+	st := statuses[0]
+	if !st.Confirmed || st.Zone != "lan" || st.Port != 80 || st.Version != "1.2.3" {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestPreflightReportsMissingListener(t *testing.T) {
+	statuses, err := newRunner(t, unconfirmedProber(), false).Preflight(context.Background())
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if statuses[0].Confirmed {
+		t.Fatal("aucun ecouteur ne repond, la zone ne doit pas etre confirmee")
+	}
+	if statuses[0].Tried == 0 {
+		t.Error("Preflight doit avoir tente au moins un port")
+	}
+}
+
 func TestStrictAppliesOnlyWhenListenerProven(t *testing.T) {
-	report, got := run(t, confirmedProber(), true)
+	report, got := run(t, confirmedProber("1.2.3"), true)
 
 	if zones := StrictZones(report); len(zones) != 1 || zones[0] != "lan" {
 		t.Fatalf("strict zones = %v, want [lan]", zones)
@@ -110,8 +146,6 @@ func TestStrictRequestedWithoutProofStaysBlind(t *testing.T) {
 	if s := got["red->lan:tcp/445"].Status; s != finding.StatusReview {
 		t.Errorf("sans preuve d'ecouteur, RST doit rester ambigu: status = %q, want review", s)
 	}
-	// La zone non confirmee doit produire son propre constat, sinon l'operateur
-	// croit avoir mesure en strict alors qu'il n'en est rien.
 	zoneFinding, ok := got["lan"]
 	if !ok {
 		t.Fatal("aucun constat sur la zone non confirmee")
@@ -121,19 +155,34 @@ func TestStrictRequestedWithoutProofStaysBlind(t *testing.T) {
 	}
 }
 
+func TestVersionDriftIsReported(t *testing.T) {
+	_, got := run(t, confirmedProber("0.9.0"), true)
+
+	drift, ok := got["lan"]
+	if !ok {
+		t.Fatal("aucun constat sur l'ecart de version")
+	}
+	if drift.Status != finding.StatusReview || drift.Observed != "0.9.0" || drift.Expected != "1.2.3" {
+		t.Fatalf("constat = %+v", drift)
+	}
+}
+
+func TestMatchingVersionsProduceNoDrift(t *testing.T) {
+	_, got := run(t, confirmedProber("1.2.3"), true)
+	if _, ok := got["lan"]; ok {
+		t.Fatal("aucun constat de zone ne devrait etre emis quand tout concorde")
+	}
+}
+
 func TestOpenOnDeniedFlowIsCriticalLeak(t *testing.T) {
-	p := fakeProber{fallback: probe.Result{Outcome: probe.OutcomeOpen}}
-	_, got := run(t, p, false)
+	_, got := run(t, fakeProber{fallback: probe.Result{Outcome: probe.OutcomeOpen}}, false)
 
 	leak, ok := got["red->lan:tcp/445"]
 	if !ok {
 		t.Fatal("controle red->lan:tcp/445 absent")
 	}
-	if leak.Status != finding.StatusFail {
-		t.Errorf("status = %q, want fail", leak.Status)
-	}
-	if leak.Severity != finding.SeverityCritical {
-		t.Errorf("severity = %q, want critical (445 est un port sensible)", leak.Severity)
+	if leak.Status != finding.StatusFail || leak.Severity != finding.SeverityCritical {
+		t.Errorf("constat = %q / %q, want fail / critical", leak.Status, leak.Severity)
 	}
 	if leak.Declared {
 		t.Error("445 n'est pas declare dans la matrice")
@@ -144,23 +193,19 @@ func TestOpenOnDeniedFlowIsCriticalLeak(t *testing.T) {
 }
 
 func TestFilteredMeansCompliantDenyAndBrokenAllow(t *testing.T) {
-	p := fakeProber{fallback: probe.Result{Outcome: probe.OutcomeFiltered}}
-	_, got := run(t, p, false)
+	_, got := run(t, fakeProber{fallback: probe.Result{Outcome: probe.OutcomeFiltered}}, false)
 
 	if s := got["red->lan:tcp/445"].Status; s != finding.StatusPass {
 		t.Errorf("flux interdit bloque: status = %q, want pass", s)
 	}
 	broken := got["red->lan:tcp/80"]
-	if broken.Status != finding.StatusFail {
-		t.Errorf("flux autorise bloque: status = %q, want fail", broken.Status)
-	}
-	if broken.Severity != finding.SeverityMedium {
-		t.Errorf("severity = %q, want medium", broken.Severity)
+	if broken.Status != finding.StatusFail || broken.Severity != finding.SeverityMedium {
+		t.Errorf("flux autorise bloque: %q / %q, want fail / medium", broken.Status, broken.Severity)
 	}
 }
 
 func TestObservedDistinguishesListenerFromService(t *testing.T) {
-	_, got := run(t, confirmedProber(), true)
+	_, got := run(t, confirmedProber("1.2.3"), true)
 	if got["red->lan:tcp/80"].Observed != "open (ecouteur warden)" {
 		t.Errorf("observed = %q", got["red->lan:tcp/80"].Observed)
 	}
@@ -172,8 +217,7 @@ func TestObservedDistinguishesListenerFromService(t *testing.T) {
 }
 
 func TestSkippedProtocolsAreReportedAsSkipped(t *testing.T) {
-	p := fakeProber{fallback: probe.Result{Outcome: probe.OutcomeSkipped}}
-	_, got := run(t, p, false)
+	_, got := run(t, fakeProber{fallback: probe.Result{Outcome: probe.OutcomeSkipped}}, false)
 	for key, f := range got {
 		if f.Status != finding.StatusSkipped {
 			t.Errorf("%s: status = %q, want skipped", key, f.Status)
@@ -184,5 +228,8 @@ func TestSkippedProtocolsAreReportedAsSkipped(t *testing.T) {
 func TestRunRejectsMissingSetup(t *testing.T) {
 	if _, err := (&Runner{}).Run(context.Background()); err == nil {
 		t.Fatal("Run sans matrice devrait echouer")
+	}
+	if _, err := (&Runner{}).Preflight(context.Background()); err == nil {
+		t.Fatal("Preflight sans matrice devrait echouer")
 	}
 }

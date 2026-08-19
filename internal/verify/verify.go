@@ -52,6 +52,79 @@ type Runner struct {
 	Version string
 }
 
+// ZoneStatus is the readiness of one target zone, as seen from the source.
+type ZoneStatus struct {
+	Zone string
+	// Confirmed is true when a listener answered with a valid banner.
+	Confirmed bool
+	// Port is the port that answered, zero when none did.
+	Port int
+	// Version is the build the listener announced, empty when unknown.
+	Version string
+	// Tried counts the ports probed before giving up.
+	Tried int
+}
+
+// Preflight checks whether a listener is reachable in every target zone,
+// before any compliance verdict is computed. It exists because the strict
+// workflow spans several machines: an operator who starts the listener in the
+// wrong zone, on ports already taken, or stops it too early, otherwise only
+// finds out after a full run whose verdicts are quietly degraded.
+//
+// Preflight stops probing a zone as soon as one banner comes back, so it is
+// cheap enough to run before every measurement.
+func (r *Runner) Preflight(ctx context.Context) ([]ZoneStatus, error) {
+	if r.Matrix == nil {
+		return nil, fmt.Errorf("no matrix loaded")
+	}
+	if r.Prober == nil {
+		return nil, fmt.Errorf("no prober configured")
+	}
+	cases, err := r.Matrix.Cases(r.Options.From)
+	if err != nil {
+		return nil, err
+	}
+
+	byZone := make(map[string][]matrix.Case)
+	var order []string
+	for _, c := range cases {
+		if c.Proto != matrix.ProtoTCP {
+			continue
+		}
+		if _, seen := byZone[c.To.Name]; !seen {
+			order = append(order, c.To.Name)
+		}
+		byZone[c.To.Name] = append(byZone[c.To.Name], c)
+	}
+	sort.Strings(order)
+
+	statuses := make([]ZoneStatus, len(order))
+	var wg sync.WaitGroup
+	for i, zone := range order {
+		wg.Add(1)
+		go func(idx int, zone string) {
+			defer wg.Done()
+			st := ZoneStatus{Zone: zone}
+			for _, c := range byZone[zone] {
+				if ctx.Err() != nil {
+					break
+				}
+				st.Tried++
+				res := r.Prober.Check(ctx, c.To.Probe, string(c.Proto), c.Port)
+				if res.ListenerConfirmed {
+					st.Confirmed = true
+					st.Port = c.Port
+					st.Version = res.ListenerVersion
+					break
+				}
+			}
+			statuses[idx] = st
+		}(i, zone)
+	}
+	wg.Wait()
+	return statuses, nil
+}
+
 // Run probes every case and returns the report. The error return is for
 // setup failures only: a failing check is data, not an error.
 func (r *Runner) Run(ctx context.Context) (*finding.Report, error) {
@@ -101,11 +174,17 @@ func (r *Runner) Run(ctx context.Context) (*finding.Report, error) {
 	// one port of a zone. Absent that proof, strict does not apply there.
 	strictZones := make(map[string]bool)
 	targetZones := make(map[string]bool)
+	zoneVersions := make(map[string]map[string]bool)
 	for i, c := range cases {
 		targetZones[c.To.Name] = true
-		if results[i].ListenerConfirmed {
-			strictZones[c.To.Name] = true
+		if !results[i].ListenerConfirmed {
+			continue
 		}
+		strictZones[c.To.Name] = true
+		if zoneVersions[c.To.Name] == nil {
+			zoneVersions[c.To.Name] = make(map[string]bool)
+		}
+		zoneVersions[c.To.Name][results[i].ListenerVersion] = true
 	}
 
 	seq := 0
@@ -116,16 +195,20 @@ func (r *Runner) Run(ctx context.Context) (*finding.Report, error) {
 	}
 
 	if r.Options.ListenerRequested {
-		for _, name := range sortedKeys(targetZones) {
-			if strictZones[name] {
+		for _, name := range sortedTrue(targetZones) {
+			if !strictZones[name] {
+				seq++
+				report.Add(r.unconfirmedListener(seq, name))
 				continue
 			}
-			seq++
-			report.Add(r.unconfirmedListener(seq, name))
+			if mismatch := versionMismatch(zoneVersions[name], version); mismatch != "" {
+				seq++
+				report.Add(r.versionDrift(seq, name, mismatch, version))
+			}
 		}
 	}
 
-	report.Run.Context["strict_zones"] = strings.Join(sortedKeys(strictZones), ",")
+	report.Run.Context["strict_zones"] = strings.Join(sortedTrue(strictZones), ",")
 	report.Finish()
 	return report, nil
 }
@@ -152,6 +235,22 @@ func (r *Runner) unconfirmedListener(seq int, zone string) finding.Finding {
 		Remediation: "Lancer warden listen dans cette zone, ou accepter des verdicts blind. " +
 			"Note: si tous les ports de la zone sont correctement bloques, aucune banniere ne peut " +
 			"remonter et la confirmation est impossible par construction.",
+		Declared: false,
+	}
+}
+
+func (r *Runner) versionDrift(seq int, zone, observed, expected string) finding.Finding {
+	return finding.Finding{
+		ID:       fmt.Sprintf("WRD-SEG-%04d", seq),
+		Title:    "Ecart de version entre la sonde et l'ecouteur de la zone " + zone,
+		Category: Category,
+		Severity: finding.SeverityLow,
+		Status:   finding.StatusReview,
+		Target:   finding.Target{Type: "zone", Identifier: zone},
+		Expected: expected,
+		Observed: observed,
+		Remediation: "Redeployer le meme binaire des deux cotes. Deux versions differentes " +
+			"peuvent interpreter la matrice ou la banniere differemment, ce qui rend la mesure douteuse.",
 		Declared: false,
 	}
 }
@@ -263,6 +362,25 @@ func (r *Runner) verdict(c matrix.Case, res probe.Result, strict bool) (finding.
 		"Resultat non interprete: " + label, ""
 }
 
+// versionMismatch returns a printable list of listener versions that differ
+// from the prober's own, or the empty string when everything agrees. An
+// unversioned banner is tolerated: it only means the listener predates the
+// versioned format.
+func versionMismatch(seen map[string]bool, expected string) string {
+	var odd []string
+	for v := range seen {
+		if v == "" || v == expected {
+			continue
+		}
+		odd = append(odd, v)
+	}
+	if len(odd) == 0 {
+		return ""
+	}
+	sort.Strings(odd)
+	return strings.Join(odd, ", ")
+}
+
 func convert(in []matrix.Reference) []finding.Reference {
 	if len(in) == 0 {
 		return nil
@@ -281,7 +399,7 @@ func modeLabel(strict bool) string {
 	return "blind"
 }
 
-func sortedKeys(m map[string]bool) []string {
+func sortedTrue(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k, v := range m {
 		if v {
