@@ -61,9 +61,17 @@ func Serve(ctx context.Context, addr string, ports []int, token, version string,
 		bound     int
 	)
 
+	// Binding the family explicitly keeps the logs readable: a listener on
+	// 0.0.0.0 with the generic network reports connections arriving on [::],
+	// which reads like an IPv6 measurement when it is not one.
+	network := probe.NetworkFor(addr)
+	if network == "tcp" {
+		return fmt.Errorf("adresse d'ecoute invalide: %q", addr)
+	}
+
 	for _, p := range ports {
 		target := net.JoinHostPort(addr, strconv.Itoa(p))
-		ln, err := net.Listen("tcp", target)
+		ln, err := net.Listen(network, target)
 		if err != nil {
 			logf("port %d indisponible: %v", p, err)
 			continue

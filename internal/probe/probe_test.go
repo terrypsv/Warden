@@ -198,3 +198,67 @@ func TestTraversedSemantics(t *testing.T) {
 		t.Error("skipped et error ne doivent pas compter comme traverses")
 	}
 }
+
+func TestNetworkForPinsFamily(t *testing.T) {
+	cases := map[string]string{
+		"10.10.30.50": "tcp4",
+		"127.0.0.1":   "tcp4",
+		"0.0.0.0":     "tcp4",
+		"::1":         "tcp6",
+		"fd00::10":    "tcp6",
+		"::":          "tcp6",
+		"exemple.lan": "tcp",
+	}
+	for host, want := range cases {
+		if got := NetworkFor(host); got != want {
+			t.Errorf("NetworkFor(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
+func TestCheckOverIPv6(t *testing.T) {
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 indisponible sur cette machine: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = io.WriteString(conn, Banner("v6token", "test"))
+			_ = conn.Close()
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	res := TCPProber{Timeout: time.Second, ExpectToken: "v6token"}.
+		Check(context.Background(), "::1", "tcp", port)
+
+	if res.Outcome != OutcomeOpen {
+		t.Fatalf("outcome = %q (%s), want open", res.Outcome, res.Detail)
+	}
+	if !res.ListenerConfirmed {
+		t.Error("l'ecouteur IPv6 aurait du etre confirme")
+	}
+}
+
+// Un service qui n'ecoute qu'en IPv4 ne doit pas etre atteint par une sonde
+// IPv6, sinon la famille annoncee dans la matrice ne veut rien dire.
+func TestIPv4ListenerIsNotReachedOverIPv6(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	res := TCPProber{Timeout: time.Second}.Check(context.Background(), "::1", "tcp", port)
+
+	if res.Outcome == OutcomeOpen {
+		t.Error("une sonde IPv6 ne doit pas atteindre un ecouteur IPv4")
+	}
+}

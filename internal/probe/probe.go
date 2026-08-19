@@ -105,7 +105,7 @@ func (p TCPProber) Check(ctx context.Context, host, proto string, port int) Resu
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 
 	start := time.Now()
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, NetworkFor(host), addr)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -128,6 +128,21 @@ func (p TCPProber) bannerTimeout() time.Duration {
 		return p.BannerTimeout
 	}
 	return defaultBannerTimeout
+}
+
+// NetworkFor pins the address family for a literal target address, so a
+// dual-stacked host is never measured over whichever family the resolver
+// felt like using. A host that is not a literal IP falls back to the generic
+// network; the matrix only accepts literal addresses, so this is defensive.
+func NetworkFor(host string) string {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return "tcp"
+	}
+	if ip.To4() == nil {
+		return "tcp6"
+	}
+	return "tcp4"
 }
 
 // Banner builds the line a listener announces.
