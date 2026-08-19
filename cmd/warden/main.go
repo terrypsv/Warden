@@ -25,8 +25,11 @@ import (
 	"github.com/terrypsv/Warden/internal/verify"
 )
 
-// version is overridden at build time via -ldflags.
-var version = "0.1.0-dev"
+// version is injected at build time from the git tag via -ldflags. An
+// untagged build says so rather than claiming a release number it does not
+// carry: a binary that lies about its own version is worse than one that
+// admits it was built locally.
+var version = "dev"
 
 // Exit codes are part of the interface: CI and cron depend on them.
 const (

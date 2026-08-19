@@ -1,0 +1,71 @@
+name: release
+
+# Declenche par un tag de version. Le tag est la source de verite du numero
+# de version: il est injecte dans le binaire au lieu d'etre maintenu a la main
+# dans le code, ce qui evite qu'un binaire publie annonce une version fausse.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: qualite
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "fichiers non formates:"
+            echo "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+          go test ./... -count=1
+
+      - name: compilation
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="warden_${version}_${goos}_${goarch}"
+            if [ "$goos" = "windows" ]; then
+              name="${name}.exe"
+            fi
+            echo "build $name"
+            GOOS="$goos" GOARCH="$goarch" go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${version}" \
+              -o "dist/${name}" ./cmd/warden
+          done
+
+      - name: sommes de controle
+        working-directory: dist
+        run: |
+          sha256sum warden_* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*
