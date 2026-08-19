@@ -51,6 +51,8 @@ func main() {
 		err = cmdValidate(os.Args[2:])
 	case "plan":
 		err = cmdPlan(os.Args[2:])
+	case "preflight":
+		code, err = cmdPreflight(os.Args[2:])
 	case "verify":
 		code, err = cmdVerify(os.Args[2:])
 	case "listen":
@@ -74,16 +76,20 @@ func usage() {
 	fmt.Fprint(os.Stderr, `warden - validation active du cloisonnement reseau
 
 Usage:
-  warden validate -matrix <fichier>
-  warden plan     -matrix <fichier> -from <zone>
-  warden verify   -matrix <fichier> -from <zone> [-listener] [-token <jeton>] [-out rapport.json] [-brief]
-  warden listen   -ports 22,80,443 [-addr 0.0.0.0] [-token <jeton>]
+  warden validate  -matrix <fichier>
+  warden plan      -matrix <fichier> -from <zone>
+  warden preflight -matrix <fichier> -from <zone> [-token <jeton>]
+  warden verify    -matrix <fichier> -from <zone> [-listener] [-token <jeton>] [-out rapport.json] [-brief]
+  warden listen    -ports 22,80,443 [-addr 0.0.0.0] [-token <jeton>] [-duration 10m]
   warden version
 
 Mode strict:
-  Lancer warden listen dans chaque zone cible, noter le jeton affiche, puis
-  passer -listener -token <jeton> a verify. Le mode strict ne s'applique
-  qu'aux zones ou un ecouteur a reellement repondu.
+  1. Dans chaque zone cible: warden listen -token <jeton> -duration 10m
+  2. Depuis la zone source:  warden preflight ... -token <jeton>
+  3. Si preflight est vert:  warden verify ... -listener -token <jeton>
+
+  Le mode strict ne s'applique qu'aux zones ou un ecouteur a reellement
+  repondu. Une zone non confirmee reste en blind et produit son constat.
 
 Codes de sortie:
   0 conforme    1 usage    2 erreur d'execution    3 non-conformites detectees
@@ -143,6 +149,78 @@ func cmdPlan(args []string) error {
 	fmt.Printf("\n%d controle(s): %d declare(s), %d issu(s) de l'action par defaut\n",
 		len(cases), declared, len(cases)-declared)
 	return nil
+}
+
+func cmdPreflight(args []string) (int, error) {
+	fs := flag.NewFlagSet("preflight", flag.ExitOnError)
+	path := fs.String("matrix", "configs/matrix.yaml", "chemin de la matrice de flux")
+	from := fs.String("from", "", "zone depuis laquelle les sondes partent")
+	token := fs.String("token", "", "jeton attendu des ecouteurs")
+	timeout := fs.Duration("timeout", 2*time.Second, "delai par sonde")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage, err
+	}
+	if *from == "" {
+		return exitUsage, fmt.Errorf("-from est obligatoire")
+	}
+
+	m, err := matrix.Load(*path)
+	if err != nil {
+		return exitRuntime, err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	runner := &verify.Runner{
+		Matrix:  m,
+		Prober:  probe.TCPProber{Timeout: *timeout, ExpectToken: *token},
+		Version: version,
+		Options: verify.Options{From: *from},
+	}
+
+	statuses, err := runner.Preflight(ctx)
+	if err != nil {
+		return exitRuntime, err
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ZONE\tECOUTEUR\tPORT\tVERSION\tPORTS TESTES")
+	missing := 0
+	for _, st := range statuses {
+		state := "absent"
+		port := "-"
+		listenerVersion := "-"
+		if st.Confirmed {
+			state = "confirme"
+			port = strconv.Itoa(st.Port)
+			listenerVersion = st.Version
+			if listenerVersion == "" {
+				listenerVersion = "inconnue"
+			}
+		} else {
+			missing++
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n", st.Zone, state, port, listenerVersion, st.Tried)
+	}
+	if err := tw.Flush(); err != nil {
+		return exitRuntime, err
+	}
+	fmt.Println()
+
+	for _, st := range statuses {
+		if st.Confirmed && st.Version != "" && st.Version != version {
+			fmt.Printf("attention: zone %s en version %s, sonde en version %s\n", st.Zone, st.Version, version)
+		}
+	}
+
+	if missing > 0 {
+		fmt.Printf("%d zone(s) sans ecouteur confirme. Les verdicts y seront blind.\n", missing)
+		fmt.Println("note: une zone entierement bloquee ne peut pas etre confirmee, c'est attendu.")
+		return exitNonCompliant, nil
+	}
+	fmt.Println("toutes les zones cibles sont pretes pour une mesure en mode strict")
+	return exitOK, nil
 }
 
 func cmdVerify(args []string) (int, error) {
@@ -238,7 +316,7 @@ func printSummary(report *finding.Report, counts map[finding.Status]int, listene
 			continue
 		}
 		if shown == 0 {
-			fmt.Fprintln(tw, "STATUT\tGRAVITE\tFLUX\tATTENDU\tOBSERVE")
+			fmt.Fprintln(tw, "STATUT\tGRAVITE\tCIBLE\tATTENDU\tOBSERVE")
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
 			f.Status, f.Severity, f.Target.Identifier, f.Expected, shortOutcome(f.Observed))
@@ -274,6 +352,7 @@ func cmdListen(args []string) error {
 	addr := fs.String("addr", "0.0.0.0", "adresse d'ecoute")
 	raw := fs.String("ports", "", "ports TCP separes par des virgules, vide = ports de balayage par defaut")
 	token := fs.String("token", "", "jeton a annoncer, genere aleatoirement si vide")
+	duration := fs.Duration("duration", 0, "arret automatique apres ce delai, 0 pour rester jusqu'a Ctrl+C")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -294,11 +373,19 @@ func cmdListen(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	fmt.Printf("warden %s - ecoute sur %d port(s), Ctrl+C pour arreter\n", version, len(ports))
-	fmt.Printf("jeton: %s\n", value)
-	fmt.Printf("cote sonde: warden verify ... -listener -token %s\n\n", value)
+	limit := "aucune, Ctrl+C pour arreter"
+	if *duration > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *duration)
+		defer cancel()
+		limit = "arret automatique dans " + duration.String()
+	}
 
-	return listen.Serve(ctx, *addr, ports, value, func(format string, a ...any) {
+	fmt.Printf("warden %s - ecoute sur %d port(s), %s\n", version, len(ports), limit)
+	fmt.Printf("jeton: %s\n", value)
+	fmt.Printf("cote sonde: warden preflight ... -token %s\n\n", value)
+
+	return listen.Serve(ctx, *addr, ports, value, version, func(format string, a ...any) {
 		fmt.Printf(time.Now().Format("15:04:05")+" "+format+"\n", a...)
 	})
 }

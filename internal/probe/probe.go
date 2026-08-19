@@ -19,6 +19,10 @@ import (
 // BannerPrefix identifies a warden listener. A peer that answers with this
 // prefix is a listener we placed there, not a service that happened to be
 // running. Everything about strict mode depends on this distinction.
+//
+// Wire format: "WARDEN/1 <token> <version>\n". The version is optional so a
+// listener from an older build still validates, but reporting the mismatch
+// beats debugging an obscure flag error across two machines.
 const BannerPrefix = "WARDEN/1 "
 
 // bannerMaxBytes caps how much of the peer's first line we read.
@@ -62,6 +66,9 @@ type Result struct {
 	// ListenerConfirmed is true when the peer identified itself as a warden
 	// listener with a valid token. This is proof, not a claim.
 	ListenerConfirmed bool
+	// ListenerVersion is the build the listener announced, empty when it
+	// predates versioned banners.
+	ListenerVersion string
 }
 
 // Prober checks one endpoint. Implementations must be safe for concurrent use.
@@ -104,11 +111,13 @@ func (p TCPProber) Check(ctx context.Context, host, proto string, port int) Resu
 	if err == nil {
 		banner := readBanner(conn, p.bannerTimeout())
 		_ = conn.Close()
+		_, listenerVersion, _ := ParseBanner(banner)
 		return Result{
 			Outcome:           OutcomeOpen,
 			Latency:           elapsed,
 			Banner:            banner,
 			ListenerConfirmed: MatchBanner(banner, p.ExpectToken),
+			ListenerVersion:   listenerVersion,
 		}
 	}
 	return Result{Outcome: Classify(err), Latency: elapsed, Detail: err.Error()}
@@ -121,15 +130,38 @@ func (p TCPProber) bannerTimeout() time.Duration {
 	return defaultBannerTimeout
 }
 
-// MatchBanner reports whether a banner proves a warden listener answered.
-// The token comparison is constant time: the token is a shared secret that
-// tells an operator whether the measurement can be trusted, and leaking it
-// through timing would let a rogue service impersonate a listener.
-func MatchBanner(banner, expectToken string) bool {
+// Banner builds the line a listener announces.
+func Banner(token, version string) string {
+	if version == "" {
+		return BannerPrefix + token + "\n"
+	}
+	return BannerPrefix + token + " " + version + "\n"
+}
+
+// ParseBanner splits a warden banner into its token and version.
+func ParseBanner(banner string) (token, version string, ok bool) {
 	if !strings.HasPrefix(banner, BannerPrefix) {
+		return "", "", false
+	}
+	fields := strings.Fields(strings.TrimPrefix(banner, BannerPrefix))
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	if len(fields) > 1 {
+		version = fields[1]
+	}
+	return fields[0], version, true
+}
+
+// MatchBanner reports whether a banner proves a warden listener answered.
+// The token comparison is constant time: the token tells an operator whether
+// a measurement can be trusted, and leaking it through timing would let a
+// rogue service impersonate a listener.
+func MatchBanner(banner, expectToken string) bool {
+	token, _, ok := ParseBanner(banner)
+	if !ok {
 		return false
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(banner, BannerPrefix))
 	if expectToken == "" {
 		return true
 	}

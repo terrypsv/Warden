@@ -37,7 +37,7 @@ func serveBanner(t *testing.T, text string) int {
 }
 
 func TestCheckConfirmsWardenListener(t *testing.T) {
-	port := serveBanner(t, BannerPrefix+"deadbeefcafe0001\n")
+	port := serveBanner(t, Banner("deadbeefcafe0001", "0.1.0"))
 
 	p := TCPProber{Timeout: time.Second, ExpectToken: "deadbeefcafe0001"}
 	res := p.Check(context.Background(), "127.0.0.1", "tcp", port)
@@ -48,13 +48,30 @@ func TestCheckConfirmsWardenListener(t *testing.T) {
 	if !res.ListenerConfirmed {
 		t.Errorf("l'ecouteur aurait du etre confirme, banniere recue: %q", res.Banner)
 	}
+	if res.ListenerVersion != "0.1.0" {
+		t.Errorf("version = %q, want 0.1.0", res.ListenerVersion)
+	}
+}
+
+func TestCheckAcceptsUnversionedBanner(t *testing.T) {
+	port := serveBanner(t, Banner("abc", ""))
+
+	res := TCPProber{Timeout: time.Second, ExpectToken: "abc"}.
+		Check(context.Background(), "127.0.0.1", "tcp", port)
+
+	if !res.ListenerConfirmed {
+		t.Error("une banniere sans version reste valide")
+	}
+	if res.ListenerVersion != "" {
+		t.Errorf("version = %q, want vide", res.ListenerVersion)
+	}
 }
 
 func TestCheckRejectsWrongToken(t *testing.T) {
-	port := serveBanner(t, BannerPrefix+"aaaaaaaaaaaaaaaa\n")
+	port := serveBanner(t, Banner("aaaaaaaaaaaaaaaa", "0.1.0"))
 
-	p := TCPProber{Timeout: time.Second, ExpectToken: "bbbbbbbbbbbbbbbb"}
-	res := p.Check(context.Background(), "127.0.0.1", "tcp", port)
+	res := TCPProber{Timeout: time.Second, ExpectToken: "bbbbbbbbbbbbbbbb"}.
+		Check(context.Background(), "127.0.0.1", "tcp", port)
 
 	if res.Outcome != OutcomeOpen {
 		t.Fatalf("outcome = %q, want open", res.Outcome)
@@ -67,8 +84,8 @@ func TestCheckRejectsWrongToken(t *testing.T) {
 func TestCheckSilentServiceIsNotConfirmed(t *testing.T) {
 	port := serveBanner(t, "")
 
-	p := TCPProber{Timeout: time.Second, BannerTimeout: 100 * time.Millisecond}
-	res := p.Check(context.Background(), "127.0.0.1", "tcp", port)
+	res := TCPProber{Timeout: time.Second, BannerTimeout: 100 * time.Millisecond}.
+		Check(context.Background(), "127.0.0.1", "tcp", port)
 
 	if res.Outcome != OutcomeOpen {
 		t.Fatalf("outcome = %q, want open", res.Outcome)
@@ -76,16 +93,12 @@ func TestCheckSilentServiceIsNotConfirmed(t *testing.T) {
 	if res.ListenerConfirmed {
 		t.Error("un service muet ne doit jamais etre pris pour un ecouteur warden")
 	}
-	if res.Banner != "" {
-		t.Errorf("banner = %q, want vide", res.Banner)
-	}
 }
 
 func TestCheckForeignBannerIsNotConfirmed(t *testing.T) {
 	port := serveBanner(t, "SSH-2.0-OpenSSH_9.6\r\n")
 
-	p := TCPProber{Timeout: time.Second}
-	res := p.Check(context.Background(), "127.0.0.1", "tcp", port)
+	res := TCPProber{Timeout: time.Second}.Check(context.Background(), "127.0.0.1", "tcp", port)
 
 	if res.ListenerConfirmed {
 		t.Error("une banniere SSH ne doit pas confirmer un ecouteur warden")
@@ -95,15 +108,37 @@ func TestCheckForeignBannerIsNotConfirmed(t *testing.T) {
 	}
 }
 
+func TestParseBanner(t *testing.T) {
+	cases := []struct {
+		in      string
+		token   string
+		version string
+		ok      bool
+	}{
+		{"WARDEN/1 abc 0.1.0", "abc", "0.1.0", true},
+		{"WARDEN/1 abc", "abc", "", true},
+		{"WARDEN/1 ", "", "", false},
+		{"SSH-2.0-OpenSSH_9.6", "", "", false},
+		{"", "", "", false},
+	}
+	for _, c := range cases {
+		token, version, ok := ParseBanner(c.in)
+		if ok != c.ok || token != c.token || version != c.version {
+			t.Errorf("ParseBanner(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				c.in, token, version, ok, c.token, c.version, c.ok)
+		}
+	}
+}
+
 func TestMatchBanner(t *testing.T) {
 	cases := []struct {
 		banner string
 		expect string
 		want   bool
 	}{
-		{BannerPrefix + "abc", "abc", true},
-		{BannerPrefix + "abc", "", true},
-		{BannerPrefix + "abc", "xyz", false},
+		{"WARDEN/1 abc 0.1.0", "abc", true},
+		{"WARDEN/1 abc", "", true},
+		{"WARDEN/1 abc", "xyz", false},
 		{"SSH-2.0-OpenSSH_9.6", "", false},
 		{"", "", false},
 		{"WARDEN/0 abc", "abc", false},

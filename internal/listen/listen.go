@@ -33,11 +33,16 @@ func NewToken() (string, error) {
 }
 
 // Serve binds every requested port on addr and announces itself to every
-// connection with a signed banner, then closes. The banner is what lets the
-// prober prove a listener was really there instead of trusting the operator's
-// -listener flag. Ports that cannot be bound are reported and skipped rather
-// than aborting the whole run.
-func Serve(ctx context.Context, addr string, ports []int, token string, logf func(string, ...any)) error {
+// connection with a signed, versioned banner, then closes. The banner is what
+// lets the prober prove a listener was really there instead of trusting the
+// operator's -listener flag. Ports that cannot be bound are reported and
+// skipped rather than aborting the whole run.
+//
+// Serve returns when ctx is done. Callers wanting an unattended run should
+// bound the context: a listener left behind answers later probes and is then
+// indistinguishable from a real service, which silently corrupts a later
+// measurement.
+func Serve(ctx context.Context, addr string, ports []int, token, version string, logf func(string, ...any)) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -48,7 +53,7 @@ func Serve(ctx context.Context, addr string, ports []int, token string, logf fun
 		return fmt.Errorf("no token provided")
 	}
 
-	banner := probe.BannerPrefix + token + "\n"
+	banner := probe.Banner(token, version)
 
 	var (
 		wg        sync.WaitGroup
