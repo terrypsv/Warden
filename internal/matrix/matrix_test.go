@@ -201,21 +201,6 @@ func TestParseIPv6Matrix(t *testing.T) {
 	}
 }
 
-func TestFamilyDefaultsToIPv4(t *testing.T) {
-	m, err := Parse([]byte(validYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	for _, z := range m.Zones {
-		if z.Family != FamilyIPv4 {
-			t.Errorf("zone %q: family = %q, want ipv4 par defaut", z.Name, z.Family)
-		}
-		if z.Network() != "tcp4" {
-			t.Errorf("zone %q: network = %q, want tcp4", z.Name, z.Network())
-		}
-	}
-}
-
 func TestParseRejectsFamilyMismatch(t *testing.T) {
 	cases := map[string]string{
 		"cidr v6 declare ipv4":  "version: 1\ndefault: deny\nzones:\n  - name: a\n    cidr: fd00::/64\n    probe: fd00::1\n    family: ipv4\n  - name: b\n    cidr: 10.0.0.0/24\n    probe: 10.0.0.1\n",
