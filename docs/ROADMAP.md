@@ -11,8 +11,9 @@
 - [x] Codes de sortie exploitables en cron et CI, mode `-brief`
 - [x] Validation terrain sur le lab : red vers dmz, red vers lan
 - [x] Banniere signee et confirmation du mode strict zone par zone
-- [ ] Ports Active Directory dans le balayage par defaut
-- [ ] `warden discover` : signaler les services absents de la matrice
+- [x] Ports Active Directory dans le balayage par defaut
+- [x] `warden preflight` et arret automatique des ecouteurs
+- [x] `warden discover` : services joignables absents de la matrice
 - [ ] Release multi-plateforme avec SHA256SUMS
 
 ## v0.2.0 - agents par zone
@@ -32,7 +33,9 @@
 
 ## Hors perimetre
 
-- Scan de decouverte generaliste : c'est le role de nmap, pas de Warden
+- Scan de decouverte generaliste : `warden discover` balaye une liste de
+  services courants pour confronter le reseau a la matrice, il ne remplace
+  pas nmap et ne fait ni fingerprinting ni enumeration de version
 - Test de vulnerabilite : Warden mesure des chemins, pas des failles
 - Modification de configuration : l'outil observe et rapporte, il ne corrige pas
 
