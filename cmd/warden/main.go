@@ -17,6 +17,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/terrypsv/Warden/internal/discover"
 	"github.com/terrypsv/Warden/internal/finding"
 	"github.com/terrypsv/Warden/internal/listen"
 	"github.com/terrypsv/Warden/internal/matrix"
@@ -53,6 +54,8 @@ func main() {
 		err = cmdPlan(os.Args[2:])
 	case "preflight":
 		code, err = cmdPreflight(os.Args[2:])
+	case "discover":
+		code, err = cmdDiscover(os.Args[2:])
 	case "verify":
 		code, err = cmdVerify(os.Args[2:])
 	case "listen":
@@ -80,6 +83,7 @@ Usage:
   warden plan      -matrix <fichier> -from <zone>
   warden preflight -matrix <fichier> -from <zone> [-token <jeton>]
   warden verify    -matrix <fichier> -from <zone> [-listener] [-token <jeton>] [-out rapport.json] [-brief]
+  warden discover  -matrix <fichier> -from <zone> [-to <zone>] [-ports 22,8000-8100] [-out decouverte.json]
   warden listen    -ports 22,80,443 [-addr 0.0.0.0] [-token <jeton>] [-duration 10m]
   warden version
 
@@ -90,6 +94,11 @@ Mode strict:
 
   Le mode strict ne s'applique qu'aux zones ou un ecouteur a reellement
   repondu. Une zone non confirmee reste en blind et produit son constat.
+
+Decouverte:
+  verify controle ce qui est declare, discover trouve ce qui ne l'est pas.
+  Tout service signale par discover est un trou dans la declaration, pas
+  forcement dans le pare-feu.
 
 Codes de sortie:
   0 conforme    1 usage    2 erreur d'execution    3 non-conformites detectees
@@ -220,6 +229,103 @@ func cmdPreflight(args []string) (int, error) {
 		return exitNonCompliant, nil
 	}
 	fmt.Println("toutes les zones cibles sont pretes pour une mesure en mode strict")
+	return exitOK, nil
+}
+
+func cmdDiscover(args []string) (int, error) {
+	fs := flag.NewFlagSet("discover", flag.ExitOnError)
+	path := fs.String("matrix", "configs/matrix.yaml", "chemin de la matrice de flux")
+	from := fs.String("from", "", "zone depuis laquelle les sondes partent")
+	to := fs.String("to", "", "limiter la decouverte a cette zone cible")
+	portSpec := fs.String("ports", "", "ports et plages, ex 22,8000-8100. Vide = liste etendue par defaut")
+	out := fs.String("out", "", "ecrire le rapport JSON dans ce fichier")
+	timeout := fs.Duration("timeout", time.Second, "delai par sonde")
+	parallel := fs.Int("parallel", 64, "nombre de sondes simultanees")
+	token := fs.String("token", "", "jeton des ecouteurs warden, pour ne pas les confondre avec des services")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage, err
+	}
+	if *from == "" {
+		return exitUsage, fmt.Errorf("-from est obligatoire")
+	}
+
+	ports, err := discover.ParsePortSpec(*portSpec)
+	if err != nil {
+		return exitUsage, err
+	}
+
+	m, err := matrix.Load(*path)
+	if err != nil {
+		return exitRuntime, err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	runner := &discover.Runner{
+		Matrix:  m,
+		Prober:  probe.TCPProber{Timeout: *timeout, ExpectToken: *token},
+		Version: version,
+		Options: discover.Options{
+			From:     *from,
+			To:       *to,
+			Ports:    ports,
+			Parallel: *parallel,
+		},
+	}
+
+	services, err := runner.Run(ctx)
+	if err != nil {
+		return exitRuntime, err
+	}
+
+	swept := len(ports)
+	if swept == 0 {
+		swept = len(discover.DefaultPorts)
+	}
+	fmt.Printf("warden %s - decouverte depuis %s, %d port(s) balaye(s) par zone\n\n", version, *from, swept)
+
+	if len(services) == 0 {
+		fmt.Println("aucun service joignable")
+		return exitOK, nil
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ZONE\tPORT\tETAT\tDETAIL")
+	for _, s := range services {
+		state := "non declare"
+		detail := "-"
+		switch {
+		case s.ListenerConfirmed:
+			state = "ecouteur warden"
+			detail = "ignore"
+		case s.Declared:
+			state = "declare"
+			detail = string(s.Action)
+		case s.Banner != "":
+			detail = s.Banner
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", s.Zone, s.Port, state, detail)
+	}
+	if err := tw.Flush(); err != nil {
+		return exitRuntime, err
+	}
+
+	undeclared := discover.Undeclared(services)
+	fmt.Printf("\n%d service(s) joignable(s), dont %d absent(s) de la matrice\n",
+		len(services), len(undeclared))
+
+	if *out != "" {
+		if err := discover.Report(services, *from, version).WriteFile(*out); err != nil {
+			return exitRuntime, err
+		}
+		fmt.Printf("rapport JSON: %s\n", *out)
+	}
+
+	if fragment := discover.YAMLSuggestion(services, *from); fragment != "" {
+		fmt.Printf("\nA integrer dans la matrice apres relecture:\n\n%s", fragment)
+		return exitNonCompliant, nil
+	}
 	return exitOK, nil
 }
 
