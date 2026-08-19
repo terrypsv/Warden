@@ -21,7 +21,8 @@ const SchemaVersion = 1
 
 // DefaultSweepPorts is used when the matrix does not define sweep_ports.
 // These are the ports whose exposure across a zone boundary is most likely
-// to matter: remote access, SMB, RDP, WinRM and common web listeners.
+// to matter: remote access, SMB, RDP, WinRM, common web listeners, and the
+// Active Directory services an attacker reaches for first.
 var DefaultSweepPorts = []int{22, 80, 88, 135, 139, 389, 443, 445, 464, 3268, 3269, 3389, 5985, 8080}
 
 // Action is the expected outcome for a flow.
@@ -41,6 +42,20 @@ const (
 	ProtoICMP Proto = "icmp"
 )
 
+// Family is the address family a zone is tested over.
+//
+// It is explicit and defaults to IPv4 because "tcp" alone lets the resolver
+// decide: the same matrix could then be measured over v4 on one host and v6
+// on another, and a dual-stacked target can be firewalled on one family and
+// wide open on the other. A segmentation tool that cannot say which family
+// it measured is not saying much.
+type Family string
+
+const (
+	FamilyIPv4 Family = "ipv4"
+	FamilyIPv6 Family = "ipv6"
+)
+
 // Reference attaches an external framework identifier to a flow so findings
 // can be traced back to a control. Frameworks and identifiers are free text
 // on purpose: the operator owns the mapping, Warden does not invent one.
@@ -51,10 +66,19 @@ type Reference struct {
 
 // Zone is a network segment with a reachable probe endpoint inside it.
 type Zone struct {
-	Name  string `yaml:"name"`
-	CIDR  string `yaml:"cidr"`
-	Probe string `yaml:"probe"`
-	Note  string `yaml:"note"`
+	Name   string `yaml:"name"`
+	CIDR   string `yaml:"cidr"`
+	Probe  string `yaml:"probe"`
+	Family Family `yaml:"family"`
+	Note   string `yaml:"note"`
+}
+
+// Network returns the dial network for TCP probes toward this zone.
+func (z Zone) Network() string {
+	if z.Family == FamilyIPv6 {
+		return "tcp6"
+	}
+	return "tcp4"
 }
 
 // Flow is one declared intent between two zones.
@@ -117,7 +141,8 @@ func (m *Matrix) Validate() error {
 	}
 
 	known := make(map[string]bool, len(m.Zones))
-	for i, z := range m.Zones {
+	for i := range m.Zones {
+		z := &m.Zones[i]
 		if z.Name == "" {
 			return fmt.Errorf("zone %d: name is empty", i)
 		}
@@ -125,13 +150,32 @@ func (m *Matrix) Validate() error {
 			return fmt.Errorf("zone %q is declared twice", z.Name)
 		}
 		known[z.Name] = true
-		if _, _, err := net.ParseCIDR(z.CIDR); err != nil {
+
+		switch z.Family {
+		case "":
+			z.Family = FamilyIPv4
+		case FamilyIPv4, FamilyIPv6:
+		default:
+			return fmt.Errorf("zone %q: family must be %q or %q, got %q",
+				z.Name, FamilyIPv4, FamilyIPv6, z.Family)
+		}
+
+		ip, network, err := net.ParseCIDR(z.CIDR)
+		if err != nil {
 			return fmt.Errorf("zone %q: invalid cidr %q", z.Name, z.CIDR)
 		}
-		if net.ParseIP(z.Probe) == nil {
+		if isIPv4(ip) != (z.Family == FamilyIPv4) {
+			return fmt.Errorf("zone %q: cidr %s does not match family %s", z.Name, z.CIDR, z.Family)
+		}
+
+		probe := net.ParseIP(z.Probe)
+		if probe == nil {
 			return fmt.Errorf("zone %q: probe must be a bare IP address, got %q", z.Name, z.Probe)
 		}
-		if !cidrContains(z.CIDR, z.Probe) {
+		if isIPv4(probe) != (z.Family == FamilyIPv4) {
+			return fmt.Errorf("zone %q: probe %s does not match family %s", z.Name, z.Probe, z.Family)
+		}
+		if !network.Contains(probe) {
 			return fmt.Errorf("zone %q: probe %s is outside %s", z.Name, z.Probe, z.CIDR)
 		}
 	}
@@ -206,6 +250,15 @@ type Case struct {
 	Declared   bool
 	Comment    string
 	References []Reference
+}
+
+// Network is the dial network for this case: the address family of the
+// destination zone for TCP, the bare protocol name otherwise.
+func (c Case) Network() string {
+	if c.Proto != ProtoTCP {
+		return string(c.Proto)
+	}
+	return c.To.Network()
 }
 
 // Cases expands the matrix into the checks runnable from a single source
@@ -291,14 +344,6 @@ func flowKey(from, to string, proto Proto, port int) string {
 	return fmt.Sprintf("%s->%s:%s/%d", from, to, proto, port)
 }
 
-func cidrContains(cidr, ip string) bool {
-	_, network, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return false
-	}
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
-	return network.Contains(parsed)
+func isIPv4(ip net.IP) bool {
+	return ip.To4() != nil
 }
