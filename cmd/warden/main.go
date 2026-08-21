@@ -20,6 +20,7 @@ import (
 	"github.com/terrypsv/Warden/internal/discover"
 	"github.com/terrypsv/Warden/internal/finding"
 	"github.com/terrypsv/Warden/internal/listen"
+	"github.com/terrypsv/Warden/internal/locality"
 	"github.com/terrypsv/Warden/internal/matrix"
 	"github.com/terrypsv/Warden/internal/probe"
 	"github.com/terrypsv/Warden/internal/verify"
@@ -103,9 +104,35 @@ Decouverte:
   Tout service signale par discover est un trou dans la declaration, pas
   forcement dans le pare-feu.
 
+Localite:
+  verify, preflight et discover refusent de mesurer si la machine n'est pas
+  dans la zone source, ou si elle a une patte dans plusieurs zones. Une telle
+  machine contourne le pare-feu et produit un rapport faux mais credible.
+  Forcer avec -no-locality-check si le contournement est voulu.
+
 Codes de sortie:
   0 conforme    1 usage    2 erreur d'execution    3 non-conformites detectees
 `)
+}
+
+// checkLocality refuse de mesurer depuis une machine mal placee, sauf
+// contournement explicite. C'est la garde contre le pire cas: un rapport faux
+// mais credible, produit quand la sonde ne traverse pas le pare-feu parce
+// qu'elle part d'une machine qui n'est pas dans la zone declaree, ou qui a une
+// patte dans plusieurs zones a la fois.
+func checkLocality(m *matrix.Matrix, from string, skip bool) (int, error) {
+	if skip {
+		fmt.Fprintln(os.Stderr, "avertissement: verification de localite desactivee (-no-locality-check)")
+		return exitOK, nil
+	}
+	zones := make([]locality.Zone, 0, len(m.Zones))
+	for _, z := range m.Zones {
+		zones = append(zones, locality.Zone{Name: z.Name, CIDR: z.CIDR})
+	}
+	if _, err := locality.Check(from, zones); err != nil {
+		return exitRuntime, err
+	}
+	return exitOK, nil
 }
 
 func cmdValidate(args []string) error {
@@ -169,6 +196,7 @@ func cmdPreflight(args []string) (int, error) {
 	from := fs.String("from", "", "zone depuis laquelle les sondes partent")
 	token := fs.String("token", "", "jeton attendu des ecouteurs")
 	timeout := fs.Duration("timeout", 2*time.Second, "delai par sonde")
+	noLocalityCheck := fs.Bool("no-locality-check", false, "ne pas verifier que la machine est dans la zone source")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
 	}
@@ -179,6 +207,9 @@ func cmdPreflight(args []string) (int, error) {
 	m, err := matrix.Load(*path)
 	if err != nil {
 		return exitRuntime, err
+	}
+	if code, err := checkLocality(m, *from, *noLocalityCheck); err != nil {
+		return code, err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -245,6 +276,7 @@ func cmdDiscover(args []string) (int, error) {
 	timeout := fs.Duration("timeout", time.Second, "delai par sonde")
 	parallel := fs.Int("parallel", 64, "nombre de sondes simultanees")
 	token := fs.String("token", "", "jeton des ecouteurs warden, pour ne pas les confondre avec des services")
+	noLocalityCheck := fs.Bool("no-locality-check", false, "ne pas verifier que la machine est dans la zone source")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
 	}
@@ -260,6 +292,9 @@ func cmdDiscover(args []string) (int, error) {
 	m, err := matrix.Load(*path)
 	if err != nil {
 		return exitRuntime, err
+	}
+	if code, err := checkLocality(m, *from, *noLocalityCheck); err != nil {
+		return code, err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -342,6 +377,7 @@ func cmdVerify(args []string) (int, error) {
 	listener := fs.Bool("listener", false, "demander des verdicts stricts, valides zone par zone")
 	token := fs.String("token", "", "jeton attendu des ecouteurs, vide accepte toute banniere warden")
 	brief := fs.Bool("brief", false, "sortie d'une ligne, pour cron et supervision")
+	noLocalityCheck := fs.Bool("no-locality-check", false, "ne pas verifier que la machine est dans la zone source")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, err
 	}
@@ -352,6 +388,9 @@ func cmdVerify(args []string) (int, error) {
 	m, err := matrix.Load(*path)
 	if err != nil {
 		return exitRuntime, err
+	}
+	if code, err := checkLocality(m, *from, *noLocalityCheck); err != nil {
+		return code, err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
