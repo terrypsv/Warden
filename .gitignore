@@ -20,3 +20,6 @@ OPS.md
 .vscode/
 *.swp
 .DS_Store
+# profils de couverture: produits par une mesure, jamais versionnes
+couverture
+*.out
