@@ -1,7 +1,7 @@
 # Schema de constat (v1.0)
 
-Format commun a tous les outils de la suite. Chaque collecteur emet ce JSON,
-la couche d'audit le consomme sans adaptateur specifique.
+Format partage par les outils de la suite qui l'ont adopte: Warden, Clavis,
+Janus, Aegis et Vigil. Une couche d'audit les consomme sans adaptateur; les autres outils produisent leur propre rapport et le rejoindront.
 
 Regle de compatibilite : **ajouts uniquement**. Tout renommage, suppression ou
 changement de semantique d'un champ existant impose de passer la
