@@ -151,9 +151,9 @@ rend les mesures non ambigues.
 
 ## Format de rapport
 
-Le JSON produit suit le schema decrit dans `docs/finding-schema.md`, partage
-avec les autres outils de la suite. Un seul consommateur pourra agreger tous
-les collecteurs sans adaptateur specifique.
+Le JSON produit suit le schema decrit dans `docs/finding-schema.md`, que
+Warden, Clavis, Janus, Aegis et Vigil emettent. Un seul consommateur agrege
+ces cinq collecteurs sans adaptateur; les autres outils le rejoindront.
 
 ## Validation terrain
 
