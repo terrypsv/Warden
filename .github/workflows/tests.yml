@@ -1,0 +1,72 @@
+# Les tests tournent sur les trois systemes pour lesquels la publication
+# produit des binaires.
+#
+# Compiler pour Linux et macOS prouve que le code compile pour Linux et macOS,
+# rien de plus. Une compilation croisee ne lance rien: elle ne dit pas si le
+# programme ouvre un fichier, lit des droits, ou parle a un terminal une fois
+# la-bas. Publier six executables verifies sur un seul systeme revient a
+# publier cinq promesses.
+#
+# Ce que cette verification ne couvre pas: rien de ce qui demande un terminal.
+# Une integration continue n'en a pas, donc les saisies masquees, les sessions
+# guidees et la couleur restent verifiees a la main. C'est une limite reelle,
+# pas un oubli.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# bash sur les trois systemes: les runners Windows en ont un, et une seule
+# ecriture des etapes vaut mieux que trois qui derivent.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Sans cela, un echec sur un systeme annule les deux autres, et on perd
+      # l'information qui compte: est-ce partout ou seulement la.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # La version vient du module, pas d'une constante recopiee dans le
+      # workflow. Une CI qui compile avec un Go different de celui declare
+      # verifie autre chose que ce qui sera publie.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: format
+        run: |
+          non_formates=$(gofmt -l .)
+          if [ -n "$non_formates" ]; then
+            echo "fichiers non formates:"
+            echo "$non_formates"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: tests
+        run: go test ./... -count=1
+
+      # Le detecteur de course demande cgo, absent des runners Windows par
+      # defaut. Deux systemes sur trois suffisent: une course n'est pas propre
+      # a une plateforme.
+      - name: tests avec detecteur de course
+        if: matrix.os != 'windows-latest'
+        run: go test ./... -count=1 -race
+
+      - name: compilation
+        run: go build ./...
