@@ -152,8 +152,8 @@ rend les mesures non ambigues.
 ## Format de rapport
 
 Le JSON produit suit le schema decrit dans `docs/finding-schema.md`, que
-Warden, Clavis, Janus, Aegis et Vigil emettent. Un seul consommateur agrege
-ces cinq collecteurs sans adaptateur; les autres outils le rejoindront.
+dix outils de la suite emettent: Warden, Clavis, Janus, Aegis, Vigil, Atlas,
+Vestige, Aurora, Sylva et Phoenix. Un seul consommateur les agrege sans adaptateur.
 
 ## Validation terrain
 
