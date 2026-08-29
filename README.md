@@ -1,3 +1,6 @@
+<img width="511" height="114" alt="ascii-art-text" src="https://github.com/user-attachments/assets/4dcee9b3-18b7-4b5a-84a5-d5b4cf2368dd" />
+
+
 # Warden
 
 Validation active du cloisonnement reseau. Tu declares la matrice de flux que
