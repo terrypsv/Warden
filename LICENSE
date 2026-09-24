@@ -9,6 +9,11 @@ modification, adaptation, traduction, distribution, publication ou
 exploitation commerciale, totale ou partielle, est interdite sans
 autorisation écrite préalable de l'auteur.
 
+Le présent texte couvre toutes les versions du logiciel présentes dans
+ce dépôt, y compris son historique de révisions et ses anciennes
+publications. Il remplace toute autre licence ou mention de licence que
+l'auteur a pu faire figurer dans une version antérieure.
+
 Lorsque ce dépôt est public sur GitHub, les conditions d'utilisation de
 GitHub permettent à ses utilisateurs de le consulter et d'en créer une
 copie (fork) sur la plateforme. Ces possibilités ne confèrent aucun autre
@@ -37,6 +42,11 @@ No license is granted. Any use, reproduction, modification, adaptation,
 translation, distribution, publication or commercial exploitation, in
 whole or in part, is prohibited without the prior written consent of the
 author.
+
+This text covers every version of the software in this repository,
+including its revision history and earlier releases. It supersedes any
+other license or license notice the author may have included in an
+earlier version.
 
 When this repository is public on GitHub, the GitHub Terms of Service
 allow its users to view it and to fork it within the platform. This grants
