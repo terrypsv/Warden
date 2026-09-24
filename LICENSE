@@ -1,18 +1,56 @@
-Copyright (c) 2026 Terry Passave. Tous droits reserves. / All rights reserved.
+Copyright (c) 2026 Terry Passave. Tous droits réservés. / All rights reserved.
 
-Ce logiciel et sa documentation sont la propriete exclusive de Terry Passave.
-Aucune licence, expresse ou implicite, n'est accordee.
+Ce logiciel, son code source, sa documentation et ses éléments graphiques
+sont des œuvres protégées par le droit d'auteur. Terry Passave en est
+l'auteur et le seul titulaire des droits.
 
-Toute utilisation, reproduction, modification, distribution, publication,
-ingenierie inverse ou exploitation commerciale, totale ou partielle, est
-interdite sans autorisation ecrite prealable de l'auteur.
+Aucune licence n'est accordée. Toute utilisation, reproduction,
+modification, adaptation, traduction, distribution, publication ou
+exploitation commerciale, totale ou partielle, est interdite sans
+autorisation écrite préalable de l'auteur.
 
-L'acces a ce depot, y compris en lecture, ne confere aucun droit d'usage.
+Lorsque ce dépôt est public sur GitHub, les conditions d'utilisation de
+GitHub permettent à ses utilisateurs de le consulter et d'en créer une
+copie (fork) sur la plateforme. Ces possibilités ne confèrent aucun autre
+droit, en particulier aucun droit d'exécuter, de réutiliser ou de
+redistribuer tout ou partie du code en dehors de GitHub.
 
-This software and its documentation are the exclusive property of
-Terry Passave. No license, express or implied, is granted. Any use,
-reproduction, modification, distribution, publication, reverse engineering
-or commercial exploitation, in whole or in part, is prohibited without the
-prior written consent of the author.
+Ces dispositions s'appliquent sous réserve des droits que la loi reconnaît
+impérativement à l'utilisateur légitime d'un logiciel (article L122-6-1 du
+Code de la propriété intellectuelle).
 
-Access to this repository, including read access, grants no usage rights.
+Les composants de tiers éventuellement inclus restent soumis à leur propre
+licence.
+
+Demandes d'autorisation : terrypassave@pm.me
+
+Le présent texte est régi par le droit français. En cas de divergence entre
+la version française et la version anglaise, la version française prévaut.
+
+-------------------------------------------------------------------------
+
+This software, its source code, documentation and graphic elements are
+works protected by copyright. Terry Passave is their author and sole
+rights holder.
+
+No license is granted. Any use, reproduction, modification, adaptation,
+translation, distribution, publication or commercial exploitation, in
+whole or in part, is prohibited without the prior written consent of the
+author.
+
+When this repository is public on GitHub, the GitHub Terms of Service
+allow its users to view it and to fork it within the platform. This grants
+no other right, in particular no right to run, reuse or redistribute any
+part of the code outside GitHub.
+
+These terms apply subject to the rights that the law mandatorily grants to
+the lawful user of a computer program (Article L122-6-1 of the French
+Intellectual Property Code).
+
+Third-party components that may be included remain subject to their own
+licenses.
+
+Permission requests: terrypassave@pm.me
+
+These terms are governed by French law. In case of discrepancy between the
+French and English versions, the French version prevails.
