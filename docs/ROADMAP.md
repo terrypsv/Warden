@@ -1,62 +1,62 @@
 # Feuille de route
 
-## v1.0.0 - source unique (livree)
+## v1.0.0 - source unique (livrée)
 
-- [x] Matrice de flux YAML validee strictement
-- [x] Expansion en controles, declares et par defaut
+- [x] Matrice de flux YAML validée strictement
+- [x] Expansion en contrôles, déclarés et par défaut
 - [x] Sonde TCP avec classification open / refused / filtered
-- [x] Modes blind et strict autour de l'ambiguite du RST
-- [x] Ecouteurs `warden listen` pour la zone cible
-- [x] Rapport JSON au schema commun
+- [x] Modes blind et strict autour de l'ambiguïté du RST
+- [x] Écouteurs `warden listen` pour la zone cible
+- [x] Rapport JSON au schéma commun
 - [x] Codes de sortie exploitables en cron et CI, mode `-brief`
 - [x] Validation terrain sur le lab : red vers dmz, red vers lan
-- [x] Banniere signee et confirmation du mode strict zone par zone
-- [x] Ports Active Directory dans le balayage par defaut
-- [x] `warden preflight` et arret automatique des ecouteurs
+- [x] Bannière signée et confirmation du mode strict zone par zone
+- [x] Ports Active Directory dans le balayage par défaut
+- [x] `warden preflight` et arrêt automatique des écouteurs
 - [x] `warden discover` : services joignables absents de la matrice
 - [x] Release multi-plateforme avec SHA256SUMS
 
 ## v1.1.0 - familles d'adresses
 
-- [x] Famille explicite par zone, IPv4 par defaut
-- [x] Famille pinnee au dial et a l'ecoute, plus de resolution ambigue
-- [ ] Tester les deux familles d'une meme zone en une execution
+- [x] Famille explicite par zone, IPv4 par défaut
+- [x] Famille pinnée au dial et à l'écoute, plus de résolution ambiguë
+- [ ] Tester les deux familles d'une même zone en une exécution
 
 ## v2.0.0 - agents par zone
 
-- [ ] Agent `warden agent` avec canal de controle authentifie
-- [ ] Sondage UDP et ICMP confirme cote recepteur
-- [ ] Detection asymetrique : verifier les deux sens d'un flux
-- [ ] Matrice multi-source en une seule execution
+- [ ] Agent `warden agent` avec canal de contrôle authentifié
+- [ ] Sondage UDP et ICMP confirmé côté récepteur
+- [ ] Détection asymétrique : vérifier les deux sens d'un flux
+- [ ] Matrice multi-source en une seule exécution
 
 ## v2.1.0 - exploitation
 
 - [ ] Rapport HTML local, comme dans Argus, en loopback avec jeton
-- [ ] Comparaison entre deux rapports : ce qui a change depuis la derniere mesure
-- [ ] Import de la configuration OPNsense pour pre-remplir la matrice
-- [ ] Ordonnancement periodique et historique
+- [ ] Comparaison entre deux rapports : ce qui a changé depuis la dernière mesure
+- [ ] Import de la configuration OPNsense pour pré-remplir la matrice
+- [ ] Ordonnancement périodique et historique
 
-## Hors perimetre
+## Hors périmètre
 
-- Scan de decouverte generaliste : `warden discover` balaye une liste de
-  services courants pour confronter le reseau a la matrice, il ne remplace
-  pas nmap et ne fait ni fingerprinting ni enumeration de version
-- Test de vulnerabilite : Warden mesure des chemins, pas des failles
+- Scan de découverte généraliste : `warden discover` balaye une liste de
+  services courants pour confronter le réseau à la matrice, il ne remplace
+  pas nmap et ne fait ni fingerprinting ni énumération de version
+- Test de vulnérabilité : Warden mesure des chemins, pas des failles
 - Modification de configuration : l'outil observe et rapporte, il ne corrige pas
 
-## Validation terrain, 17 aout 2026
+## Validation terrain, 17 août 2026
 
-Premiere campagne sur infrastructure reelle (lab goeland-1, 4 zones).
-Cinq defauts trouves, zero faux positif :
+Première campagne sur infrastructure réelle (lab personnel, 4 zones).
+Cinq défauts trouvés, zéro faux positif :
 
-- regle `pass RED net -> 10.10.10.10` residuelle dans OPNsense, exposant SMB,
-  NetBIOS, RPC et SSH du controleur de domaine a la zone attaquant
-- transit inter-zones autorise par l'hote Proxmox (`ip_forward=1`, aucune regle
-  de blocage entre vmbr1/2/3), contournant integralement le pare-feu
+- règle `pass` résiduelle dans OPNsense, exposant SMB, NetBIOS, RPC et SSH du
+  contrôleur de domaine à la zone attaquant
+- transit inter-zones autorisé par l'hôte Proxmox (routage actif sans règle
+  de blocage entre les ponts), contournant intégralement le pare-feu
 - conflit d'adresse IP entre deux conteneurs de la DMZ
-- `nftables.service` inactif, donc aucune regle persistante au reboot
-- cible bWAPP joignable sur 8081 et absente de la matrice, trouvee par
+- `nftables.service` inactif, donc aucune règle persistante au reboot
+- cible applicative joignable et absente de la matrice, trouvée par
   `warden discover`
 
-Correction verifiee par une seconde mesure : 5 constats critiques ramenes a
-zero, code de sortie 0.
+Correction vérifiée par une seconde mesure : 5 constats critiques ramenés à
+zéro, code de sortie 0.

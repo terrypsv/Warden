@@ -1,11 +1,11 @@
-# Schema de constat (v1.0)
+# Schéma de constat (v1.0)
 
-Format partage par dix outils de la suite: Warden, Clavis, Janus, Aegis, Vigil,
-Atlas, Vestige, Aurora, Sylva et Phoenix. Une couche d'audit les consomme sans adaptateur. Quaero et Bastion produisent leur propre rapport: leur matiere ne se projette pas en constats sans la deformer.
+Format partagé par dix outils de la suite: Warden, Clavis, Janus, Aegis, Vigil,
+Atlas, Vestige, Aurora, Sylva et Phoenix. Une couche d'audit les consomme sans adaptateur. Quaero et Bastion produisent leur propre rapport: leur matière ne se projette pas en constats sans la déformer.
 
-Regle de compatibilite : **ajouts uniquement**. Tout renommage, suppression ou
-changement de semantique d'un champ existant impose de passer la
-`schema_version` a `2.0`.
+Règle de compatibilité : **ajouts uniquement**. Tout renommage, suppression ou
+changement de sémantique d'un champ existant impose de passer la
+`schema_version` à `2.0`.
 
 ## Enveloppe
 
@@ -25,7 +25,7 @@ changement de semantique d'un champ existant impose de passer la
 ```
 
 `run.context` est libre : chaque outil y met ce qui permet de rejouer la
-mesure a l'identique.
+mesure à l'identique.
 
 ## Constat
 
@@ -54,34 +54,34 @@ mesure a l'identique.
 
 | Champ | Obligatoire | Notes |
 |-------|-------------|-------|
-| `id` | oui | prefixe par outil : `WRD-` Warden, `ARG-` Argus, `VGL-` Vigil, `AGS-` Aegis |
-| `category` | oui | domaine du controle, ex. `network-segmentation`, `host-hardening` |
+| `id` | oui | préfixe par outil : `WRD-` Warden, `ARG-` Argus, `VGL-` Vigil, `AGS-` Aegis |
+| `category` | oui | domaine du contrôle, ex. `network-segmentation`, `host-hardening` |
 | `severity` | oui | `critical`, `high`, `medium`, `low`, `info` |
 | `status` | oui | `pass`, `fail`, `review`, `skipped`, `error` |
 | `target` | oui | `type` libre par outil (`flow`, `host`, `package`, `rule`) |
-| `expected` / `observed` | recommande | texte court, comparable d'un run a l'autre |
-| `declared` | oui | le controle vient-il d'une declaration explicite ou d'une regle par defaut |
-| `references` | non | mapping vers un referentiel, fourni par l'operateur, jamais invente par l'outil |
+| `expected` / `observed` | recommandé | texte court, comparable d'un run à l'autre |
+| `declared` | oui | le contrôle vient-il d'une déclaration explicite ou d'une règle par défaut |
+| `references` | non | mapping vers un référentiel, fourni par l'opérateur, jamais inventé par l'outil |
 
 ### Sur `status`
 
-`review` existe pour les observations reellement ambigues, comme un RST qui
-peut venir d'un port ferme ou d'un reject de pare-feu. Un outil de securite
-qui tranche au hasard pour eviter une case "a verifier" produit des faux
-negatifs, ce qui est pire qu'un aveu d'ignorance.
+`review` existe pour les observations réellement ambiguës, comme un RST qui
+peut venir d'un port fermé ou d'un reject de pare-feu. Un outil de sécurité
+qui tranche au hasard pour éviter une case "à vérifier" produit des faux
+négatifs, ce qui est pire qu'un aveu d'ignorance.
 
-Regle de sortie : seul `fail` doit faire echouer un pipeline. `review` merite
+Règle de sortie : seul `fail` doit faire échouer un pipeline. `review` mérite
 une alerte, pas un blocage.
 
 ### Sur `references`
 
-Les identifiants de referentiel viennent du fichier de configuration de
-l'operateur. Aucun outil de la suite ne devine un identifiant ANSSI ou MITRE :
-une reference fausse dans un rapport d'audit est un probleme de credibilite,
-pas un detail.
+Les identifiants de référentiel viennent du fichier de configuration de
+l'opérateur. Aucun outil de la suite ne devine un identifiant ANSSI ou MITRE :
+une référence fausse dans un rapport d'audit est un problème de crédibilité,
+pas un détail.
 
 ## Tri
 
 `Finish()` ordonne les constats : statut (fail, review, error, skipped, pass),
-puis gravite, puis identifiant. Deux executions sur le meme environnement
+puis gravité, puis identifiant. Deux exécutions sur le même environnement
 produisent des rapports diffables.
