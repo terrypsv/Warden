@@ -1,7 +1,8 @@
 # Schéma de constat (v1.0)
 
-Format partagé par dix outils de la suite: Warden, Clavis, Janus, Aegis, Vigil,
-Atlas, Vestige, Aurora, Sylva et Phoenix. Une couche d'audit les consomme sans adaptateur. Quaero et Bastion produisent leur propre rapport: leur matière ne se projette pas en constats sans la déformer.
+Format partagé par seize outils de la suite. Acta, la couche d'audit, les
+consomme sans adaptateur, et son README donne la liste à jour avec le préfixe
+de chaque outil.
 
 Règle de compatibilité : **ajouts uniquement**. Tout renommage, suppression ou
 changement de sémantique d'un champ existant impose de passer la
