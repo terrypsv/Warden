@@ -3,9 +3,11 @@
 
 # Warden
 
-Validation active du cloisonnement réseau. Vous déclarez la matrice de flux que
-votre architecture est censée appliquer, Warden teste ce qui passe réellement et
-signale les trois écarts qui comptent :
+**Vérifie qu'un réseau découpé en zones bloque vraiment ce qu'il doit bloquer, en testant les connexions d'une zone à l'autre.**
+
+Validation active du cloisonnement réseau. À partir d'une matrice de zones déclarée en YAML, teste en TCP chaque flux autorisé ou interdit et signale les écarts, y compris les services joignables absents de la déclaration.
+
+Warden distingue les trois écarts qui comptent :
 
 - un flux déclaré autorisé qui ne passe pas (règle manquante ou cassée)
 - un flux qui passe alors qu'il n'aurait pas dû (fuite de cloisonnement)
@@ -32,13 +34,20 @@ l'agent récepteur.
 ## Installation
 
 Récupérer le binaire de la dernière release, vérifier la somme de contrôle,
-puis l'installer :
+puis l'installer. Sans numéro de version passé en argument, `gh release download`
+prend toujours la release la plus récente, la commande ne se périme donc pas :
 
 ```bash
+gh release download --repo terrypsv/Warden --pattern 'warden_*_linux_amd64' --pattern SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-sudo install -m 755 warden_1.0.0_linux_amd64 /usr/local/bin/warden
+sudo install -m 755 warden_*_linux_amd64 /usr/local/bin/warden
 warden version
 ```
+
+Pour un autre système, remplacer `linux_amd64` par `linux_arm64`,
+`darwin_amd64`, `darwin_arm64`, `windows_amd64.exe` ou `windows_arm64.exe`. Les
+binaires sont aussi sur la page
+[Releases](https://github.com/terrypsv/Warden/releases).
 
 Depuis les sources :
 
@@ -59,6 +68,24 @@ warden validate -matrix configs/matrix.yaml
 warden plan     -matrix configs/matrix.yaml -from red
 warden verify   -matrix configs/matrix.yaml -from red -out rapport.json
 ```
+
+### Options
+
+| Option | Sous-commandes | Effet |
+|--------|----------------|-------|
+| `-matrix <fichier>` | validate, plan, preflight, verify, discover | Chemin de la matrice de flux, `configs/matrix.yaml` par défaut. |
+| `-from <zone>` | plan, preflight, verify, discover | Zone depuis laquelle les sondes partent. Obligatoire. |
+| `-to <zone>` | discover | Limite la découverte à cette zone cible. |
+| `-ports <liste>` | discover, listen | Ports à balayer (`22,8000-8100` pour discover) ou à ouvrir (`22,80,443` pour listen). Vide, la liste par défaut s'applique. |
+| `-out <fichier>` | verify, discover | Écrit le rapport JSON dans ce fichier. |
+| `-timeout <durée>` | preflight, verify, discover | Délai par sonde, 2s par défaut (1s pour discover). |
+| `-parallel <n>` | verify, discover | Nombre de sondes simultanées, 16 par défaut (64 pour discover). |
+| `-listener` | verify | Demande des verdicts stricts, validés zone par zone. |
+| `-token <jeton>` | preflight, verify, discover, listen | Jeton attendu des écouteurs. Pour verify, vide accepte toute bannière Warden. Pour listen, c'est le jeton annoncé, généré au hasard si vide. |
+| `-brief` | verify | Sortie d'une ligne, pour cron et supervision. |
+| `-no-locality-check` | preflight, verify, discover | Désactive le contrôle de localité décrit plus bas. |
+| `-addr <adresse>` | listen | Adresse d'écoute, `0.0.0.0` par défaut. |
+| `-duration <durée>` | listen | Arrêt automatique après ce délai, 0 pour rester jusqu'à Ctrl+C. |
 
 ### Mesure en mode strict
 
@@ -90,6 +117,45 @@ précisément ce qu'il faut faire remonter.
 Le fragment YAML proposé est en `action: deny` avec un marqueur à valider :
 l'outil observe la joignabilité, il ne connaît pas l'intention, et proposer
 `allow` reviendrait à blanchir une exposition accidentelle en flux documenté.
+
+### Contrôle de localité
+
+`preflight`, `verify` et `discover` vérifient d'abord que la machine se trouve
+bien dans la zone source. Warden compare les adresses de la machine, hors
+bouclage et lien local, aux CIDR des zones de la matrice. Il refuse de mesurer
+dans deux cas :
+
+- aucune adresse locale n'appartient à la zone passée à `-from`
+- la machine a une adresse dans plusieurs zones de la matrice, comme un
+  hyperviseur qui a une patte dans chaque pont
+
+Dans le premier cas, les sondes mesurent un autre chemin que celui déclaré.
+Dans le second, elles ne traversent pas le pare-feu. Le rapport serait alors
+faux mais crédible. Le refus sort en code 2, avec la raison.
+`-no-locality-check` force la mesure quand le contournement est voulu, et
+l'avertissement est alors écrit sur la sortie d'erreur.
+
+### IPv4 ou IPv6 par zone
+
+Chaque zone est mesurée sur une seule famille d'adresses, choisie par la clé
+`family` (`ipv4` ou `ipv6`, `ipv4` si la clé est absente). Le CIDR et
+l'adresse `probe` de la zone doivent appartenir à cette famille, sinon la
+matrice est refusée. Les sondes partent en `tcp4` ou en `tcp6` selon la zone,
+jamais au choix du résolveur, parce qu'une cible double pile peut être filtrée
+sur une famille et ouverte sur l'autre.
+
+```yaml
+zones:
+  - name: dmz6
+    family: ipv6
+    cidr: fd00:10:20::/64
+    probe: fd00:10:20::50
+```
+
+Côté zone cible, `warden listen` écoute en IPv4 avec l'adresse par défaut
+`0.0.0.0`. Pour une zone `ipv6`, lancer l'écouteur avec `-addr ::` ou avec
+l'adresse IPv6 de la machine. Tester les deux familles d'une même zone en une
+seule exécution est prévu dans la feuille de route.
 
 ### Codes de sortie
 
@@ -154,9 +220,9 @@ rend les mesures non ambiguës.
 
 ## Format de rapport
 
-Le JSON produit suit le schéma décrit dans `docs/finding-schema.md`, que
-dix outils de la suite émettent: Warden, Clavis, Janus, Aegis, Vigil, Atlas,
-Vestige, Aurora, Sylva et Phoenix. Un seul consommateur les agrège sans adaptateur.
+Le JSON produit suit le schéma décrit dans `docs/finding-schema.md`, partagé
+par seize outils de la suite. Acta les agrège sans adaptateur, et son README
+donne la liste à jour.
 
 ## Validation terrain
 
@@ -181,6 +247,7 @@ internal/matrix     chargement et validation de la matrice, expansion en contrô
 internal/probe      sondes réseau, bannières, classification des résultats
 internal/verify     orchestration, verdicts, preflight
 internal/discover   services joignables absents de la matrice
+internal/locality   refus de mesurer depuis une machine hors de la zone source
 internal/listen     écouteurs à placer dans les zones cibles
 internal/finding    schéma de constat commun à la suite
 configs             matrice d'exemple
